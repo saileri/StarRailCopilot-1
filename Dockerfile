@@ -11,8 +11,8 @@ COPY requirements-in.txt .
 
 # Install build deps: system libs for av/numpy + compile tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential gcc g++ cmake \
-    pkg-config libavformat-dev libavcodec-dev libavdevice-dev \
+    build-essential gcc g++ cmake pkg-config \
+    libavformat-dev libavcodec-dev libavdevice-dev \
     libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --prefix=/install \
@@ -25,8 +25,8 @@ FROM python:3.10-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 \
     libxrender1 libfontconfig1 fonts-noto-cjk \
-    libavformat58 libavcodec58 libavdevice58 \
-    libavutil56 libavfilter7 libswscale5 libswresample3 \
+    libavformat59 libavcodec59 libavdevice59 \
+    libavutil57 libavfilter8 libswscale6 libswresample4 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled packages from builder
