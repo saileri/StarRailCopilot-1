@@ -1,23 +1,21 @@
 # StarRailCopilot with cloud_web support (remote browser mode)
-#
-# This image runs SRC only — the browser runs on a SEPARATE machine
-# on the same LAN, connected via CDP (Chrome DevTools Protocol).
 
 # === Stage 1: Build wheels ===
 FROM python:3.10-bookworm AS builder
 
 WORKDIR /build
-COPY requirements-in.txt .
+COPY requirements-in.txt constraint.txt .
 
 # Install build deps: system libs for av/numpy + compile tools
-# Constraint: av==10.0.0 needs cython<3.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc g++ cmake pkg-config \
     libavformat-dev libavcodec-dev libavdevice-dev \
     libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir "cython<3.0" \
-    && PIP_CONSTRAINT=/dev/null pip install --no-cache-dir --prefix=/install \
+    && rm -rf /var/lib/apt/lists/*
+
+# av==10.0.0 needs cython<3.0 — pass constraint via ENV
+ENV PIP_CONSTRAINT=/build/constraint.txt
+RUN pip install --no-cache-dir --prefix=/install \
         -r requirements-in.txt selenium>=4.10.0
 
 # === Stage 2: Runtime ===
