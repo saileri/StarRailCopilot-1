@@ -251,17 +251,30 @@ class BrowserDevice:
     # CDP helpers
     # ------------------------------------------------------------------
 
-    def _cdp_send(self, ws, method: str, params: dict = None, msg_id: int = 1):
-        """Send a CDP command over WebSocket and return the result."""
+    def _cdp_send(self, ws, method: str, params: dict = None, msg_id: int = 1, timeout: float = 10.0):
+        """Send a CDP command over WebSocket and return the result.
+
+        CDP WebSockets interleave event notifications (no 'id' field) with
+        command responses (have 'id').  We skip events until we find the
+        response matching *msg_id*, respecting *timeout*.
+        """
         import json as _json
         msg = {"id": msg_id, "method": method, "params": params or {}}
         ws.send(_json.dumps(msg))
-        # Read responses until we get the matching id
-        for _ in range(100):
-            resp = _json.loads(ws.recv())
-            if resp.get("id") == msg_id:
-                return resp.get("result", {})
-        return {}
+        old_timeout = ws.gettimeout()
+        ws.settimeout(timeout)
+        try:
+            while True:
+                try:
+                    resp = _json.loads(ws.recv())
+                except Exception:
+                    # Timeout or connection error — give up
+                    return {}
+                if resp.get("id") == msg_id:
+                    return resp.get("result", {})
+                # Event notification (no id or different id) — skip
+        finally:
+            ws.settimeout(old_timeout)
 
     def _execute_js(self, script: str):
         """Execute JavaScript in the browser. Works in both local and remote mode."""
