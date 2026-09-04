@@ -62,7 +62,11 @@ class UI(MainPage):
 
         @run_once
         def cloud_login():
-            if self.config.is_cloud_game:
+            if self.config.is_cloud_web_game:
+                from tasks.login.cloud_web import LoginWebCloud
+                login_web = LoginWebCloud(self.config, self.device._browser)
+                login_web.cloud_web_enter_game()
+            elif self.config.is_cloud_game:
                 from tasks.login.login import Login
                 login = Login(config=self.config, device=self.device)
                 self.device.dump_hierarchy()
