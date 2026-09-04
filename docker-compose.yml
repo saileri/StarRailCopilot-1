@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  src-cloud:
+    build: .
+    image: starrail-copilot-cloud:latest
+    container_name: src-cloud-web
+    restart: unless-stopped
+    ports:
+      - "22267:22267"
+    volumes:
+      - ./config:/app/config
+      - ./browser_profile:/app/browser_profile
+      - ./log:/app/log
+    environment:
+      - TZ=Asia/Shanghai
+      # Uncomment to use remote browser on another machine:
+      # - BROWSER_REMOTE_URL=http://192.168.31.x:9222
+    # For local headless Chrome (needs --shm-size for video decoding):
+    shm_size: '2gb'
