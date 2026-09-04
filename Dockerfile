@@ -40,8 +40,8 @@ COPY . .
 # Create directories
 RUN mkdir -p /app/config /app/log
 
-EXPOSE 22267
+EXPOSE 22367
 
 ENV PYTHONPATH=/app
 
-CMD ["python", "src.py"]
+CMD ["python", "gui.py"]

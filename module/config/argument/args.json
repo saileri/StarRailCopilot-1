@@ -148,6 +148,23 @@
           "close_emulator"
         ]
       }
+    },
+    "Browser": {
+      "RemoteURL": {
+        "type": "input",
+        "value": "",
+        "display": "hide"
+      },
+      "BrowserPath": {
+        "type": "input",
+        "value": "",
+        "display": "hide"
+      },
+      "DriverPath": {
+        "type": "input",
+        "value": "",
+        "display": "hide"
+      }
     }
   },
   "Restart": {

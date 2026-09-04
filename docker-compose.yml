@@ -7,11 +7,9 @@ services:
     container_name: src-cloud-web
     restart: unless-stopped
     ports:
-      - "22267:22267"
+      - "22367:22367"
     volumes:
       - ./config:/app/config
       - ./log:/app/log
     environment:
       - TZ=Asia/Shanghai
-      # Remote browser: set to your browser machine's IP + port
-      # - BROWSER_REMOTE_URL=http://192.168.31.x:9222
