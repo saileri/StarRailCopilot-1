@@ -6,6 +6,9 @@ cloud HSR web version (https://sr.mihoyo.com/cloud).
 
 This mirrors the structure of tasks/login/cloud.py (LoginAndroidCloud)
 but operates on a browser DOM instead of Android UI hierarchy.
+
+All DOM interactions use BrowserDevice._execute_js() which works in both
+local Selenium mode and remote CDP WebSocket mode (no driver dependency).
 """
 
 import json
@@ -28,39 +31,23 @@ class WebXPath:
     """
 
     # --- Login page ---
-    # The login button on the landing page
-    ENTER_GAME = '.btn-start'  # CSS, may vary
-    # "扫码登录" tab
+    ENTER_GAME = '.btn-start'
     QR_LOGIN_TAB = '//div[contains(@class,"login")]//div[contains(text(),"扫码")]'
-    # QR code image
     QR_CODE_IMG = 'img.qr-loaded'
-    # "扫码成功" confirmation text
     QR_SUCCESS = "//*[contains(text(), '扫码成功')]"
-    # QR expired overlay
     QR_EXPIRED = 'div.qr-expired'
 
     # --- Cloud game main page (before entering game) ---
-    # "开始游戏" button
-    START_GAME_BTN = '//button[contains(text(),"开始游戏")] | //div[contains(@class,"btn") and contains(text(),"开始游戏")] | //*[@id="app"]//div[contains(@class,"start")]'
+    START_GAME_BTN = '//button[contains(text(),"开始游戏")] | //div[contains(@class,"btn") and contains(text(),"开始游戏")]'
 
     # --- Queue ---
-    # Queue info text (e.g. "预计等待时间")
     QUEUE_TEXT = '//div[contains(text(),"预计等待")]'
     QUEUE_REMAIN = '//div[contains(@class,"queue")]//span[contains(text(),"分钟")]'
 
     # --- Popup dialogs ---
-    # Generic confirm button in popups
-    POPUP_CONFIRM = '//div[contains(@class,"dialog")]//button[contains(text(),"确认")] | //div[contains(@class,"dialog")]//span[contains(text(),"确认")] | //button[contains(text(),"进入游戏")] | //span[contains(text(),"进入游戏")]'
-
-    # Billing notice: "本次游戏将使用畅玩卡无限畅玩" / "确认使用星云币"
+    POPUP_CONFIRM = '//div[contains(@class,"dialog")]//button[contains(text(),"确认")]'
     BILLING_CONFIRM = '//button[contains(text(),"进入游戏")] | //span[contains(text(),"进入游戏")]'
-
-    # "连接中断" — network disconnect
     DISCONNECT_CONFIRM = '//button[contains(text(),"退出游戏")] | //span[contains(text(),"退出游戏")]'
-
-    # Free time / paid time text
-    REMAIN_FREE = '//span[contains(text(),"免费时长")] | //div[contains(text(),"免费时长")]'
-    REMAIN_PAID = '//span[contains(text(),"星云币")] | //div[contains(text(),"星云币")]'
 
     # --- In-game floating UI ---
     FLOAT_WINDOW = '.game-player__float, .float-window, [class*="float"]'
@@ -74,18 +61,57 @@ class LoginWebCloud(ModuleBase):
     """
     Handles login + queue + game entry for the cloud HSR web version.
 
-    Usage (from SRC's login flow):
-        device.browser_start()           # start browser
-        login = LoginWebCloud(config, device)
-        login.cloud_web_enter_game()     # login + queue + enter
+    All DOM interactions use self.browser._execute_js() so they work in both:
+    - Local mode (Selenium driver)
+    - Remote mode (CDP WebSocket, no local browser needed)
     """
 
-    # How long to wait for user login (seconds)
     LOGIN_TIMEOUT = 300  # 5 minutes
 
     def __init__(self, config, device: BrowserDevice):
         super().__init__(config, device)
         self.browser = device
+
+    # ------------------------------------------------------------------
+    # JS helpers — all DOM interaction goes through _execute_js
+    # ------------------------------------------------------------------
+
+    def _js_click(self, js_selector: str) -> bool:
+        """Find element via JS and click it. Returns True if clicked."""
+        script = f"""
+            const el = {js_selector};
+            if (el) {{ el.click(); return true; }}
+            return false;
+        """
+        return bool(self.browser._execute_js(script))
+
+    def _js_click_all(self, js_selector: str) -> int:
+        """Click all matching elements. Returns count clicked."""
+        script = f"""
+            const els = {js_selector};
+            let clicked = 0;
+            for (const el of els) {{
+                if (el.offsetParent !== null) {{ el.click(); clicked++; }}
+            }}
+            return clicked;
+        """
+        return int(self.browser._execute_js(script) or 0)
+
+    def _js_text(self, js_selector: str) -> str:
+        """Get text content of first matching element."""
+        script = f"""
+            const el = {js_selector};
+            return el ? (el.innerText || el.textContent || '') : '';
+        """
+        return str(self.browser._execute_js(script) or '')
+
+    def _js_exists_visible(self, js_selector: str) -> bool:
+        """Check if a visible element matching the selector exists."""
+        script = f"""
+            const el = {js_selector};
+            return el ? (el.offsetParent !== null || el.offsetWidth > 0) : false;
+        """
+        return bool(self.browser._execute_js(script))
 
     # ------------------------------------------------------------------
     # Login detection
@@ -94,14 +120,9 @@ class LoginWebCloud(ModuleBase):
     def _is_logged_in(self) -> bool:
         """Check if user is already logged in (game page is visible)."""
         try:
-            # If we can see the start game button or are already in game,
-            # we're logged in
             result = self.browser._execute_js("""
-                // Check if we're on the game page (start button visible)
                 const startBtn = document.querySelector('.btn-start, [class*="start-game"]');
-                // Check if game is running
                 const gamePlayer = document.querySelector('.game-player');
-                // Check if there's no login form visible
                 const loginForm = document.querySelector('[class*="login-form"], [class*="account"]');
                 return {
                     hasStartBtn: !!startBtn,
@@ -114,11 +135,7 @@ class LoginWebCloud(ModuleBase):
             return False
 
     def _wait_for_login(self, timeout=None):
-        """Wait for user to complete login (manual or QR scan).
-
-        In headless mode, we attempt QR-code login.
-        In headed mode, we just wait for the user to log in manually.
-        """
+        """Wait for user to complete login (manual or QR scan)."""
         if timeout is None:
             timeout = self.LOGIN_TIMEOUT
 
@@ -137,98 +154,73 @@ class LoginWebCloud(ModuleBase):
     # Game entry
     # ------------------------------------------------------------------
 
-    def _click_start_game(self):
+    def _click_start_game(self) -> bool:
         """Click the 'Start Game' button on the cloud game home page."""
         logger.info('Clicking start game button')
-        # Try multiple selectors
-        selectors = [
-            "//button[contains(text(),'开始游戏')]",
-            "//div[contains(@class,'btn') and contains(text(),'开始游戏')]",
-            "//span[contains(text(),'开始游戏')]",
-            "//a[contains(text(),'开始游戏')]",
+        # Try text-based selectors via JS
+        click_scripts = [
+            """document.querySelector('button.start-btn, .btn-start, [class*="start-game"], [class*="play-btn"]')""",
+            """[...document.querySelectorAll('button, div.btn, span, a')].find(el => el.textContent.includes('开始游戏'))""",
+            """document.querySelector('#app button[class*="start"]')""",
         ]
-        for sel in selectors:
-            try:
-                els = self.browser.driver.find_elements(By.XPATH, sel)
-                if els and els[0].is_displayed():
-                    els[0].click()
-                    return True
-            except Exception:
-                continue
-
-        # Fallback: try CSS selector
-        try:
-            els = self.browser.driver.find_elements(By.CSS_SELECTOR,
-                '.btn-start, [class*="start-game"], [class*="play-btn"]')
-            for el in els:
-                if el.is_displayed():
-                    el.click()
-                    return True
-        except Exception:
-            pass
+        for script in click_scripts:
+            if self._js_click(script):
+                logger.info('Clicked start game button')
+                return True
 
         logger.warning('Could not find start game button')
         return False
 
-    def _handle_popups(self):
+    def _handle_popups(self) -> bool:
         """Dismiss common popups: billing confirm, network notice, etc."""
-        try:
-            # Billing confirm — click "进入游戏" or "确认"
-            confirm_texts = ['进入游戏', '确认使用', '确认', '使用流量进行游戏']
-            for text in confirm_texts:
-                els = self.browser.driver.find_elements(By.XPATH,
-                    f"//*[contains(text(),'{text}')]")
-                for el in els:
-                    if el.is_displayed():
-                        el.click()
-                        logger.info(f'Dismissed popup: {text}')
-                        time.sleep(0.5)
-                        return True
-        except Exception:
-            pass
+        confirm_texts = ['进入游戏', '确认使用', '确认', '使用流量进行游戏']
+        for text in confirm_texts:
+            script = f"""
+                const els = [...document.querySelectorAll('button, span, div, a')]
+                    .filter(el => el.textContent.includes('{text}') && el.offsetParent !== null);
+                if (els.length > 0) {{ els[0].click(); return true; }}
+                return false;
+            """
+            if self._js_click(script):
+                logger.info(f'Dismissed popup: {text}')
+                time.sleep(0.5)
+                return True
         return False
 
-    def _wait_in_queue(self, max_wait=1800):
+    def _wait_in_queue(self, max_wait=1800) -> bool:
         """Wait while in queue to enter the game."""
         logger.info('Waiting in queue...')
         start = time.time()
         while time.time() - start < max_wait:
-            # Check if we've entered the game
             if self.browser.is_in_cloud_game():
                 logger.info('Queue passed, in game!')
                 return True
 
-            # Check for queue info
-            try:
-                remain_els = self.browser.driver.find_elements(By.XPATH,
-                    WebXPath.QUEUE_TEXT)
-                if remain_els:
-                    logger.info(f'Queue: {remain_els[0].text}')
-            except Exception:
-                pass
+            # Check for queue info text
+            queue_text = self._js_text(
+                """document.querySelector('div[class*="queue"], [class*="wait"]')"""
+            )
+            if queue_text:
+                logger.info(f'Queue: {queue_text}')
 
-            # Dismiss popups while waiting
             self._handle_popups()
             time.sleep(3)
 
         logger.error(f'Queue timeout after {max_wait}s')
         return False
 
-    def _get_remaining_time(self) -> tuple[int, int]:
+    def _get_remaining_time(self) -> tuple:
         """Get remaining playtime (paid_minutes, free_minutes)."""
         paid, free = 0, 0
         try:
-            page_text = self.browser._execute_js(
-                "return document.body.innerText;"
-            )
-            # Parse "星云币时长：X分钟"
-            m = re.search(r'星云币[时長]*[：:]\s*(\d+)\s*分[钟鐘]', page_text)
-            if m:
-                paid = int(m.group(1))
-            # Parse "免费时长：X分钟"
-            m = re.search(r'免费[时長]*[：:]\s*(\d+)\s*分[钟鐘]', page_text)
-            if m:
-                free = int(m.group(1))
+            page_text = self.browser._execute_js("return document.body.innerText;")
+            if page_text:
+                m = re.search(r'星云币[时長]*[：：]\s*(\d+)\s*分[钟鐘]', page_text)
+                if m:
+                    paid = int(m.group(1))
+                m = re.search(r'免费[时長]*[：：]\s*(\d+)\s*分[钟鐘]', page_text)
+                if m:
+                    free = int(m.group(1))
         except Exception as e:
             logger.debug(f"Failed to parse remaining time: {e}")
         return paid, free
@@ -240,7 +232,6 @@ class LoginWebCloud(ModuleBase):
     def cloud_web_enter_game(self):
         """
         Complete flow: ensure browser is running → login → enter game.
-
         Returns True if successfully in game.
         """
         logger.hr('Cloud web enter game', level=1)
@@ -270,7 +261,6 @@ class LoginWebCloud(ModuleBase):
 
         # Click start game
         if not self._click_start_game():
-            # Maybe we're already in game
             if self.browser.is_in_cloud_game():
                 logger.info('Already in game')
                 return True
@@ -280,7 +270,6 @@ class LoginWebCloud(ModuleBase):
         # Handle popups and wait for queue
         self._handle_popups()
 
-        # Wait for game to start (may be in queue)
         if not self._wait_in_queue():
             raise GameNotRunningError('Queue timeout')
 
@@ -294,48 +283,33 @@ class LoginWebCloud(ModuleBase):
         """Exit the cloud game (click exit button, back to home page)."""
         logger.hr('Cloud web exit game')
         try:
-            # Try to find and click exit button
             exit_selectors = [
-                '//div[contains(@class,"exit")]',
-                '//div[contains(text(),"退出游戏")]',
-                '//button[contains(text(),"退出游戏")]',
+                """document.querySelector('div[class*="exit"]')""",
+                """[...document.querySelectorAll('div, button, span')].find(el => el.textContent.includes('退出游戏'))""",
+                """document.querySelector('button[class*="exit"]')""",
             ]
-            for sel in exit_selectors:
-                try:
-                    els = self.browser.driver.find_elements(By.XPATH, sel)
-                    for el in els:
-                        if el.is_displayed():
-                            el.click()
-                            logger.info('Clicked exit button')
-                            time.sleep(2)
-                            # Confirm exit
-                            self._handle_popups()
-                            return
-                except Exception:
-                    continue
+            for script in exit_selectors:
+                if self._js_click(script):
+                    logger.info('Clicked exit button')
+                    time.sleep(2)
+                    self._handle_popups()
+                    return
             logger.warning('Could not find exit button')
         except Exception as e:
             logger.error(f'Error exiting cloud game: {e}')
 
     def cloud_web_keep_alive(self):
-        """Periodically interact to prevent idle kick, similar to
-        LoginAndroidCloud.cloud_keep_alive()."""
+        """Periodically interact to prevent idle kick."""
         logger.hr('Cloud web keep alive', level=2)
         while True:
             self.device.sleep((45, 60))
             logger.info('Cloud web keep alive')
-            # Open and close the settings panel to prevent idle timeout
             try:
-                float_els = self.browser.driver.find_elements(
-                    By.CSS_SELECTOR, WebXPath.FLOAT_WINDOW)
-                if float_els and float_els[0].is_displayed():
-                    float_els[0].click()
-                    time.sleep(1)
-                # Click somewhere to dismiss
+                # Click the floating window if visible, then dismiss
+                self._js_click(
+                    """document.querySelector('.game-player__float, .float-window, [class*="float"]')"""
+                )
+                time.sleep(1)
                 self.browser.click_browser(640, 360)
             except Exception as e:
                 logger.debug(f'Keep alive interaction failed: {e}')
-
-
-# Need By for XPath/CSS selectors
-from selenium.webdriver.common.by import By

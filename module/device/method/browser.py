@@ -29,9 +29,7 @@ from selenium.common.exceptions import (
 )
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+
 
 from module.base.timer import Timer
 from module.logger import logger
@@ -399,18 +397,18 @@ class BrowserDevice:
         """Attempt to grab a frame directly from the <video> element via JS.
         This is faster but may fail depending on codec and CORS."""
         try:
-            result = self.driver.execute_async_script("""
-            const callback = arguments[arguments.length - 1];
-            try {
+            # Use _execute_js for both local and remote mode
+            result = self._execute_js("""
+            (() => {
                 const video = document.querySelector('.game-player__video');
-                if (!video) { callback(null); return; }
+                if (!video) return null;
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth || 1920;
                 canvas.height = video.videoHeight || 1080;
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                callback(canvas.toDataURL('image/jpeg', 0.9));
-            } catch(e) { callback(null); }
+                return canvas.toDataURL('image/jpeg', 0.9);
+            })()
             """)
             if result is None:
                 return None
@@ -527,6 +525,20 @@ class BrowserDevice:
 
     def app_start_browser(self):
         """Navigate to the cloud game URL (or start browser if needed)."""
+        if self._remote_mode:
+            # In remote mode, navigate via CDP
+            if not self.app_is_running_browser():
+                self.browser_start()
+                return
+            try:
+                self._cdp("Page.navigate", {"url": self.GAME_URL})
+                self._wait_page_loaded()
+                self._set_viewport()
+            except Exception as e:
+                logger.warning(f"Navigation failed, reconnecting: {e}")
+                self.browser_stop()
+                self.browser_start()
+            return
         if self.driver is None:
             self.browser_start()
             return
@@ -670,10 +682,11 @@ class BrowserDevice:
     def is_in_cloud_game(self) -> bool:
         """Check whether the cloud game video element is present (i.e. we're
         inside the game, not on the login/queue page)."""
-        if self.driver is None:
-            return False
         try:
-            return len(self.driver.find_elements(By.CSS_SELECTOR, ".game-player")) > 0
+            result = self._execute_js(
+                "return document.querySelector('.game-player') !== null;"
+            )
+            return bool(result)
         except Exception:
             return False
 
