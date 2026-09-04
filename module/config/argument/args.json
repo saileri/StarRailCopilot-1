@@ -153,17 +153,17 @@
       "RemoteURL": {
         "type": "input",
         "value": "",
-        "display": "hide"
+        "display": "show"
       },
       "BrowserPath": {
         "type": "input",
         "value": "",
-        "display": "hide"
+        "display": "show"
       },
       "DriverPath": {
         "type": "input",
         "value": "",
-        "display": "hide"
+        "display": "show"
       }
     }
   },

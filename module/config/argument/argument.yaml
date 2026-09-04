@@ -47,6 +47,19 @@ Emulator:
     option: [ minitouch, MaaTouch ]
   CloudPriorQueue: false
   AdbRestart: false
+Browser:
+  RemoteURL:
+    value: ''
+    type: input
+    display: show
+  BrowserPath:
+    value: ''
+    type: input
+    display: show
+  DriverPath:
+    value: ''
+    type: input
+    display: show
 EmulatorInfo:
   Emulator:
     value: auto
