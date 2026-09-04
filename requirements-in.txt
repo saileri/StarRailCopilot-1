@@ -13,6 +13,9 @@ lz4==4.3.2
 av==10.0.0
 psutil==5.9.3
 
+# Cloud web game support (browser automation)
+selenium>=4.10.0
+
 # Utils
 rich==13.3.5
 tqdm==4.65.0

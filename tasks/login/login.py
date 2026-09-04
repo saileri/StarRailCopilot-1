@@ -8,6 +8,7 @@ from tasks.login.agreement import AgreementHandler
 from tasks.login.assets.assets_login import *
 from tasks.login.assets.assets_login_popup import *
 from tasks.login.cloud import LoginAndroidCloud
+from tasks.login.cloud_web import LoginWebCloud
 from tasks.login.uid import UIDHandler
 from tasks.rogue.blessing.ui import RogueUI
 
@@ -174,7 +175,9 @@ class Login(LoginAndroidCloud, RogueUI, AgreementHandler, UIDHandler):
 
     def app_stop(self):
         logger.hr('App stop')
-        if self.config.is_cloud_game:
+        if self.config.is_cloud_web_game:
+            self.cloud_web_exit_game()
+        elif self.config.is_cloud_game:
             self.cloud_exit()
         self.device.app_stop()
 
@@ -182,7 +185,11 @@ class Login(LoginAndroidCloud, RogueUI, AgreementHandler, UIDHandler):
         logger.hr('App start')
         self.device.app_start()
 
-        if self.config.is_cloud_game:
+        if self.config.is_cloud_web_game:
+            from tasks.login.cloud_web import LoginWebCloud
+            login_web = LoginWebCloud(self.config, self.device._browser)
+            login_web.cloud_web_enter_game()
+        elif self.config.is_cloud_game:
             self.device.dump_hierarchy()
             self.cloud_enter_game()
         else:
@@ -193,10 +200,30 @@ class Login(LoginAndroidCloud, RogueUI, AgreementHandler, UIDHandler):
         self.device.app_stop()
         self.device.app_start()
 
-        if self.config.is_cloud_game:
+        if self.config.is_cloud_web_game:
+            from tasks.login.cloud_web import LoginWebCloud
+            login_web = LoginWebCloud(self.config, self.device._browser)
+            login_web.cloud_web_enter_game()
+        elif self.config.is_cloud_game:
             self.device.dump_hierarchy()
             self.cloud_enter_game()
         else:
             self.handle_app_login()
 
         self.config.task_delay(server_update=True)
+
+    # ------------------------------------------------------------------
+    # Cloud Web helpers — delegate to LoginWebCloud
+    # ------------------------------------------------------------------
+
+    def cloud_web_enter_game(self):
+        """Enter cloud web game via browser."""
+        from tasks.login.cloud_web import LoginWebCloud
+        login_web = LoginWebCloud(self.config, self.device._browser)
+        return login_web.cloud_web_enter_game()
+
+    def cloud_web_exit_game(self):
+        """Exit cloud web game back to home page."""
+        from tasks.login.cloud_web import LoginWebCloud
+        login_web = LoginWebCloud(self.config, self.device._browser)
+        login_web.cloud_web_exit_game()

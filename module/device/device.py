@@ -14,6 +14,7 @@ from module.base.timer import Timer
 from module.device.app_control import AppControl
 from module.device.control import Control
 from module.device.screenshot import Screenshot
+from module.device.method.browser import BrowserDevice
 from module.exception import (
     EmulatorNotRunningError,
     GameNotRunningError,
@@ -71,6 +72,31 @@ class Device(Screenshot, Control, AppControl):
     stuck_timer = Timer(60, count=60).start()
 
     def __init__(self, *args, **kwargs):
+        # Cloud web mode: use BrowserDevice instead of emulator
+        self._browser = None  # lazy init
+
+        if len(args) >= 1:
+            config = args[0]
+        else:
+            config = kwargs.get('config')
+
+        if config and getattr(config, 'is_cloud_web_game', False):
+            # Cloud web mode — skip all emulator init
+            logger.info('Cloud web mode: initializing browser device')
+            self.config = config
+            self._browser = BrowserDevice(config)
+            self._browser.browser_start()
+            # Skip the parent __init__ which tries ADB connection
+            # Instead, just set up the basics we need
+            from module.base.timer import Timer as _Timer
+            self._screen_size_checked = False
+            self.detect_record = set()
+            self.click_record = collections.deque(maxlen=30)
+            self.stuck_timer = _Timer(60, count=60).start()
+            self.orientation = 0
+            self.screenshot_interval_set()
+            return
+
         for trial in range(4):
             try:
                 super().__init__(*args, **kwargs)
@@ -172,6 +198,11 @@ class Device(Screenshot, Control, AppControl):
         """
         self.stuck_record_check()
 
+        # Cloud web mode: use browser screenshot
+        if self._browser is not None:
+            self.image = self._browser.screenshot_browser()
+            return self.image
+
         try:
             super().screenshot()
         except RequestHumanTakeover:
@@ -186,6 +217,16 @@ class Device(Screenshot, Control, AppControl):
 
     def dump_hierarchy(self) -> etree._Element:
         self.stuck_record_check()
+        # Cloud web mode: use browser DOM dump
+        if self._browser is not None:
+            result = self._browser.dump_hierarchy_browser()
+            if result is not None:
+                self.hierarchy = result
+                return self.hierarchy
+            # Fallback to empty hierarchy
+            from lxml import etree as _etree
+            self.hierarchy = _etree.Element("hierarchy")
+            return self.hierarchy
         return super().dump_hierarchy()
 
     def release_during_wait(self):
@@ -310,3 +351,91 @@ class Device(Screenshot, Control, AppControl):
         super().app_stop()
         self.stuck_record_clear()
         self.click_record_clear()
+
+    # ------------------------------------------------------------------
+    # Cloud web mode: override control methods to use browser
+    # ------------------------------------------------------------------
+
+    def click(self, button, control_check=True):
+        """Override click to use browser in cloud_web mode."""
+        if self._browser is not None:
+            return self._click_browser(button, control_check=control_check)
+        return super().click(button, control_check=control_check)
+
+    def long_click(self, button, duration=(1, 1.2)):
+        """Override long_click to use browser in cloud_web mode."""
+        if self._browser is not None:
+            duration = ensure_time(duration)
+            return self._long_click_browser(button, duration=duration)
+        return super().long_click(button, duration=duration)
+
+    def swipe(self, p1, p2, duration=(0.1, 0.2), name='SWIPE', distance_check=True):
+        """Override swipe to use browser in cloud_web mode."""
+        if self._browser is not None:
+            duration = ensure_time(duration)
+            if distance_check:
+                if np.linalg.norm(np.subtract(p1, p2)) < 10:
+                    logger.info('Swipe distance < 10px, dropped')
+                    return
+            return self._swipe_browser(p1, p2, duration=duration)
+        return super().swipe(p1, p2, duration=duration, name=name, distance_check=distance_check)
+
+    def drag(self, p1, p2, segments=1, shake=(0, 15), point_random=(-10, -10, 10, 10),
+             shake_random=(-5, -5, 5, 5), swipe_duration=0.25, shake_duration=0.1, name='DRAG'):
+        """Override drag to use browser in cloud_web mode."""
+        if self._browser is not None:
+            return self._drag_browser(p1, p2, point_random=point_random)
+        return super().drag(p1, p2, segments=segments, shake=shake, point_random=point_random,
+                           shake_random=shake_random, swipe_duration=swipe_duration,
+                           shake_duration=shake_duration, name=name)
+
+    def app_start(self):
+        if self._browser is not None:
+            self._browser.app_start_browser()
+            self.stuck_record_clear()
+            self.click_record_clear()
+            return
+        super().app_start()
+        self.stuck_record_clear()
+        self.click_record_clear()
+
+    def app_stop(self):
+        if self._browser is not None:
+            self._browser.app_stop_browser()
+            self.stuck_record_clear()
+            self.click_record_clear()
+            return
+        super().app_stop()
+        self.stuck_record_clear()
+        self.click_record_clear()
+
+    def app_is_running(self) -> bool:
+        if self._browser is not None:
+            return self._browser.app_is_running_browser()
+        return super().app_is_running()
+
+    def _click_browser(self, button, control_check=True):
+        """Click using browser CDP instead of emulator."""
+        if control_check:
+            self.handle_control_check(button)
+        x, y = ensure_int(*random_rectangle_point(button.button))
+        logger.info(f'Click {button} @ ({x}, {y}) [browser]')
+        self._browser.click_browser(x, y)
+
+    def _swipe_browser(self, p1, p2, duration=0.3):
+        """Swipe using browser CDP instead of emulator."""
+        p1, p2 = ensure_int(p1, p2)
+        logger.info(f'Swipe {point2str(*p1)} -> {point2str(*p2)} [browser]')
+        self._browser.swipe_browser(p1, p2, duration=duration)
+
+    def _long_click_browser(self, button, duration=1.0):
+        """Long click using browser CDP."""
+        x, y = ensure_int(*random_rectangle_point(button.button))
+        logger.info(f'Long click {button} @ ({x}, {y}), {duration}s [browser]')
+        self._browser.long_click_browser(x, y, duration)
+
+    def _drag_browser(self, p1, p2, point_random=(-10, -10, 10, 10)):
+        """Drag using browser CDP."""
+        p1, p2 = ensure_int(p1, p2)
+        logger.info(f'Drag {point2str(*p1)} -> {point2str(*p2)} [browser]')
+        self._browser.drag_browser(p1, p2)
