@@ -10,12 +10,14 @@ WORKDIR /build
 COPY requirements-in.txt .
 
 # Install build deps: system libs for av/numpy + compile tools
+# Constraint: av==10.0.0 needs cython<3.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc g++ cmake pkg-config \
     libavformat-dev libavcodec-dev libavdevice-dev \
     libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir --prefix=/install \
+    && pip install --no-cache-dir "cython<3.0" \
+    && PIP_CONSTRAINT=/dev/null pip install --no-cache-dir --prefix=/install \
         -r requirements-in.txt selenium>=4.10.0
 
 # === Stage 2: Runtime ===
