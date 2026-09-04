@@ -265,6 +265,19 @@ class BrowserDevice:
                 return resp.get("result", {})
         return {}
 
+    def _execute_js(self, script: str):
+        """Execute JavaScript in the browser. Works in both local and remote mode."""
+        if self._remote_mode and self._page_ws:
+            result = self._cdp_send(self._page_ws, "Runtime.evaluate", {
+                "expression": script,
+                "returnByValue": True,
+            })
+            val = result.get("result", {}).get("value")
+            return val
+        if self.driver is not None:
+            return self.driver.execute_script(script)
+        return None
+
     def _cdp(self, cmd: str, params: dict = None):
         """Execute a Chrome DevTools Protocol command.
         In remote mode, uses WebSocket; otherwise uses Selenium driver."""
@@ -533,6 +546,8 @@ class BrowserDevice:
 
     def app_is_running_browser(self) -> bool:
         """Check if the browser is alive and on the game page."""
+        if self._remote_mode:
+            return self._cdp_ws is not None or self._page_ws is not None
         if self.driver is None:
             return False
         try:
@@ -543,17 +558,25 @@ class BrowserDevice:
 
     def _wait_page_loaded(self, timeout=30):
         """Wait until the cloud game page's background image has loaded."""
-        try:
-            WebDriverWait(self.driver, timeout).until(
-                lambda d: d.execute_script("""
-                    const img = document.querySelector(
-                        '#app > div.home-wrapper > picture > img'
-                    );
-                    return img && img.complete && img.naturalWidth > 0;
-                """)
-            )
-        except TimeoutException:
-            logger.warning("Timed out waiting for page to load")
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                result = self._execute_js("return document.readyState === 'complete';")
+                if result:
+                    # Also check for the game page indicator
+                    result2 = self._execute_js("""
+                        const img = document.querySelector(
+                            '#app > div.home-wrapper > picture > img'
+                        );
+                        return img && img.complete && img.naturalWidth > 0;
+                    """)
+                    if result2:
+                        return
+            except Exception:
+                pass
+            _time.sleep(1)
+        logger.warning("Timed out waiting for page to load")
 
     # ------------------------------------------------------------------
     # DOM hierarchy (replaces uiautomator2 dump_hierarchy for cloud_android)
@@ -568,9 +591,6 @@ class BrowserDevice:
         text/content-desc attributes so that existing XPath selectors
         from cloud.py work unchanged.
         """
-        if self.driver is None:
-            return None
-
         # Use JS to extract a simplified DOM tree
         js = """
         (function walk(el) {
@@ -616,7 +636,7 @@ class BrowserDevice:
         })(document.body);
         """
         try:
-            tree_dict = self.driver.execute_script(js)
+            tree_dict = self._execute_js(js)
         except Exception as e:
             logger.error(f"DOM dump failed: {e}")
             return None
@@ -660,10 +680,10 @@ class BrowserDevice:
     def set_auto_battle(self, enable: bool):
         """Toggle auto-battle via localStorage manipulation, similar to
         March7thAssistant's change_auto_battle."""
-        if self.driver is None:
-            return
         try:
-            ls_raw = self.driver.execute_script("return JSON.stringify(localStorage)")
+            ls_raw = self._execute_js("return JSON.stringify(localStorage)")
+            if ls_raw is None:
+                return
             ls = json.loads(ls_raw)
             cloud = json.loads(ls.get("cg_hkrpg_cn_cloudData", "{}"))
             cloud.setdefault("value", {})
@@ -678,9 +698,10 @@ class BrowserDevice:
             cloud["value"]["RPGCloudSave"] = json.dumps(save)
             ls["cg_hkrpg_cn_cloudData"] = json.dumps(cloud)
             for k, v in ls.items():
-                self.driver.execute_script(
-                    f"localStorage.setItem('{k}', arguments[0]);", v
-                )
+                # Escape single quotes in key/value for JS string literal
+                k_escaped = k.replace("'", "\\'")
+                v_escaped = str(v).replace("'", "\\'")
+                self._execute_js(f"localStorage.setItem('{k_escaped}', '{v_escaped}');")
             logger.info(f"Auto-battle {'enabled' if enable else 'disabled'} via localStorage")
         except Exception as e:
             logger.warning(f"Failed to set auto-battle: {e}")

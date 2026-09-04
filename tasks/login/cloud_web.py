@@ -96,7 +96,7 @@ class LoginWebCloud(ModuleBase):
         try:
             # If we can see the start game button or are already in game,
             # we're logged in
-            result = self.browser.driver.execute_script("""
+            result = self.browser._execute_js("""
                 // Check if we're on the game page (start button visible)
                 const startBtn = document.querySelector('.btn-start, [class*="start-game"]');
                 // Check if game is running
@@ -218,7 +218,7 @@ class LoginWebCloud(ModuleBase):
         """Get remaining playtime (paid_minutes, free_minutes)."""
         paid, free = 0, 0
         try:
-            page_text = self.browser.driver.execute_script(
+            page_text = self.browser._execute_js(
                 "return document.body.innerText;"
             )
             # Parse "星云币时长：X分钟"
@@ -245,7 +245,7 @@ class LoginWebCloud(ModuleBase):
         """
         logger.hr('Cloud web enter game', level=1)
 
-        if self.browser.driver is None:
+        if self.browser.driver is None and not self.browser._remote_mode:
             self.browser.browser_start()
 
         # Ensure we're on the right page
