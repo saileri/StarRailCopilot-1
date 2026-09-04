@@ -884,6 +884,9 @@ class ConfigUpdater:
         # Cloud settings
         if deep_get(data, keys='Alas.Emulator.GameClient') == 'cloud_android':
             deep_set(data, keys='Alas.Emulator.PackageName', value='CN-Official')
+        if deep_get(data, keys='Alas.Emulator.GameClient') == 'cloud_web':
+            deep_set(data, keys='Alas.Emulator.PackageName', value='CN-Official')
+            deep_set(data, keys='Alas.Optimization.WhenTaskQueueEmpty', value='close_game')
 
         return data
 
@@ -920,6 +923,9 @@ class ConfigUpdater:
         if key == 'Rogue.RogueWorld.DoubleEvent' and value is True:
             yield 'Rogue.RogueWorld.UseImmersifier', True
         if key == 'Alas.Emulator.GameClient' and value == 'cloud_android':
+            yield 'Alas.Emulator.PackageName', 'CN-Official'
+            yield 'Alas.Optimization.WhenTaskQueueEmpty', 'close_game'
+        if key == 'Alas.Emulator.GameClient' and value == 'cloud_web':
             yield 'Alas.Emulator.PackageName', 'CN-Official'
             yield 'Alas.Optimization.WhenTaskQueueEmpty', 'close_game'
         # Sync Dungeon.TrailblazePower and Ornament.TrailblazePower
