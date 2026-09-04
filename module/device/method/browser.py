@@ -80,6 +80,14 @@ class BrowserDevice:
             os.getcwd(), 'browser_profile'
         )
 
+        # Remote browser support: set Browser_RemoteURL to
+        # "http://<ip>:<port>" to connect to a Chrome instance on another
+        # machine instead of launching a local one.
+        # The remote machine must start Chrome with:
+        #   chrome --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 \
+        #        --user-data-dir=/path/to/profile --app=https://sr.mihoyo.com/cloud
+        self._remote_url = getattr(config, 'Browser_RemoteURL', '') or None
+
     # ------------------------------------------------------------------
     # Browser start / stop
     # ------------------------------------------------------------------
@@ -119,7 +127,33 @@ class BrowserDevice:
         return opts
 
     def browser_start(self):
-        """Launch or reconnect to the browser."""
+        """Launch or reconnect to the browser.
+
+        If Browser_RemoteURL is set (e.g. 'http://192.168.1.100:9222'),
+        connect to a remote Chrome instance via CDP instead of launching locally.
+        This allows running SRC on one machine while the browser runs on another
+        (e.g. a headless server with GPU for video decoding, or a different desktop).
+        """
+        # Remote browser mode: connect via CDP to an already-running Chrome
+        if self._remote_url:
+            logger.info(f"Connecting to remote browser at {self._remote_url}")
+            try:
+                from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+                opts = ChromeOptions()
+                # When connecting remotely, we don't launch Chrome — it's already running
+                self.driver = webdriver.Chrome(
+                    options=opts,
+                    command_executor=self._remote_url,
+                )
+                self._set_viewport()
+                self._inject_pointer_lock_block()
+                logger.info(f"Connected to remote browser at {self._remote_url}")
+                return
+            except Exception as e:
+                logger.error(f"Failed to connect to remote browser: {e}")
+                raise
+
+        # Local browser mode: launch Chrome on this machine
         # Try reconnecting first
         if self._try_reconnect():
             logger.info("Reconnected to existing browser session")
@@ -145,13 +179,18 @@ class BrowserDevice:
         logger.info("Browser started successfully")
 
     def browser_stop(self):
-        """Quit the browser."""
+        """Quit the browser. In remote mode, only disconnect (don't kill the remote browser)."""
         if self.driver:
-            try:
-                self.driver.quit()
-            except Exception:
-                pass
-            self.driver = None
+            if self._remote_url:
+                # Remote mode: just detach, don't quit the remote browser
+                logger.info("Disconnecting from remote browser (not quitting)")
+                self.driver = None
+            else:
+                try:
+                    self.driver.quit()
+                except Exception:
+                    pass
+                self.driver = None
 
     def _try_reconnect(self) -> bool:
         """Try to connect to an existing browser session by debug port."""

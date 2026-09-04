@@ -128,6 +128,73 @@ python src.py
 4. 登录成功后，SRC 自动接管后续流程
 5. 浏览器 profile 保存在 `browser_profile/`，下次免登录
 
+## 远程浏览器（跨机器）
+
+SRC 跑在 A 机器，浏览器跑在 B 机器，通过局域网连接。
+
+### B 机器（浏览器端）启动 Chrome：
+
+```bash
+# Linux/Mac
+google-chrome \
+  --remote-debugging-port=9222 \
+  --remote-debugging-address=0.0.0.0 \
+  --user-data-dir=/tmp/cloud_hsr_profile \
+  --force-device-scale-factor=1 \
+  --disable-blink-features=AutomationControlled \
+  --app=https://sr.mihoyo.com/cloud
+
+# Windows
+chrome.exe ^
+  --remote-debugging-port=9222 ^
+  --remote-debugging-address=0.0.0.0 ^
+  --user-data-dir=C:\cloud_hsr_profile ^
+  --force-device-scale-factor=1 ^
+  --disable-blink-features=AutomationControlled ^
+  --app=https://sr.mihoyo.com/cloud
+```
+
+> ⚠️ `--remote-debugging-address=0.0.0.0` 暴露调试端口到所有网卡，
+> 仅在内网使用！不要在公网这样做。
+
+### A 机器（SRC 端）配置：
+
+在 SRC 配置中设置（需编辑代码或 JSON）：
+
+```json
+{
+  "Browser_RemoteURL": "http://192.168.x.x:9222"
+}
+```
+
+或者在 `BrowserDevice.__init__` 中设置 `self._remote_url`。
+
+SRC 会通过 CDP WebSocket 连接到 B 机器的 Chrome，远程截图和发送输入事件。
+
+### 工作原理
+
+```
+┌───── A 机器 (SRC) ─────┐        ┌───── B 机器 (Chrome) ─────┐
+│                          │        │                              │
+│  BrowserDevice           │  CDP   │  Chrome                      │
+│  screenshot_browser() ───┼───────>│  Page.captureScreenshot     │
+│  click_browser()     ────┼───────>│  Input.dispatchMouseEvent    │
+│  dump_hierarchy_browser()┼───────>│  DOM → JSON                  │
+│                          │  WS    │                              │
+└──────────────────────────┘        └──────────────────────────────┘
+                                         │
+                                         │ WebRTC
+                                         ▼
+                                    米哈游云铁服务器
+```
+
+### 远程模式的注意事项
+
+- B 机器需要能访问 `sr.mihoyo.com`（云铁网页版）
+- B 机器的 Chrome 视口会被 SRC 强制设为 1920×1080（通过 CDP）
+- 首次登录需要在 B 机器的 Chrome 上手动完成一次
+- `browser_stop()` 在远程模式下只断开连接，不会关闭 B 机器的 Chrome
+
 ## 常见问题
 
 ### Q: 截图分辨率不对？
