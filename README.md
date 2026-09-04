@@ -16,6 +16,7 @@ Star Rail auto script | 星铁速溶茶，崩坏：星穹铁道脚本，基于�
 - **模拟宇宙**：刷模拟宇宙，使用开拓力刷内圈遗器。
 - **后台托管**：自动启动模拟器和游戏，后台托管清体力和每日，通过仪表盘了解资源情况。
 - **云游戏**：（仅国服）[在云崩坏星穹铁道上运行SRC](https://github.com/LmeSzinc/StarRailCopilot/wiki/Cloud_cn)
+- **网页云游戏**：（仅国服）无需模拟器，在浏览器中直接运行云·星穹铁道，支持无头模式，低资源占用。详见 [CLOUD_WEB_GUIDE.md](CLOUD_WEB_GUIDE.md)
 
 ## 安装 [![](https://img.shields.io/github/downloads/LmeSzinc/StarRailCopilot/total?color=4e4c97)](https://github.com/LmeSzinc/StarRailCopilot/releases)
 
