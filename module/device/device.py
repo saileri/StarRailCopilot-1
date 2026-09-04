@@ -241,6 +241,10 @@ class Device(Screenshot, Control, AppControl):
         """
         Callbacks when orientation changed.
         """
+        # Cloud web mode: always landscape (0), no ADB
+        if self._browser is not None:
+            self.orientation = 0
+            return 0
         o = super().get_orientation()
 
         self.on_orientation_change_maatouch()
