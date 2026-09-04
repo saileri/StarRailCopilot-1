@@ -15,6 +15,7 @@ psutil==5.9.3
 
 # Cloud web game support (browser automation)
 selenium>=4.10.0
+websocket-client>=1.6.0
 
 # Utils
 rich==13.3.5

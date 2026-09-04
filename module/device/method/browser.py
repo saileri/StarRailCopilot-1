@@ -87,6 +87,11 @@ class BrowserDevice:
         #   chrome --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 \
         #        --user-data-dir=/path/to/profile --app=https://sr.mihoyo.com/cloud
         self._remote_url = getattr(config, 'Browser_RemoteURL', '') or None
+        self._remote_mode = False  # True when using CDP WebSocket directly (no local Chrome)
+        self._cdp_ws = None        # Browser-level CDP WebSocket (for Target commands)
+        self._page_ws = None        # Page-level CDP WebSocket (for Page, Input commands)
+        self._page_ws_url = None
+        self._ws_url = None
 
     # ------------------------------------------------------------------
     # Browser start / stop
@@ -138,15 +143,51 @@ class BrowserDevice:
         if self._remote_url:
             logger.info(f"Connecting to remote browser at {self._remote_url}")
             try:
-                from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-                opts = ChromeOptions()
-                # When connecting remotely, we don't launch Chrome — it's already running
-                self.driver = webdriver.Chrome(
-                    options=opts,
-                    command_executor=self._remote_url,
-                )
-                self._set_viewport()
-                self._inject_pointer_lock_block()
+                import requests as _requests
+                from urllib.parse import urlparse as _urlparse
+                # Discover WebSocket debugger URL from the remote Chrome
+                remote_host = _urlparse(self._remote_url).hostname
+                remote_port = _urlparse(self._remote_url).port or 9222
+
+                resp = _requests.get(f"{self._remote_url}/json/version", timeout=10)
+                resp.raise_for_status()
+                version_info = resp.json()
+                ws_url = version_info.get('webSocketDebuggerUrl', '')
+                if not ws_url:
+                    raise RuntimeError(f"No webSocketDebuggerUrl found at {self._remote_url}/json/version")
+
+                # Replace host/port in ws_url to match the remote URL
+                _ws_parsed = _urlparse(ws_url)
+                if _ws_parsed.hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
+                    ws_url = ws_url.replace(
+                        f"{_ws_parsed.hostname}:{_ws_parsed.port or 9222}",
+                        f"{remote_host}:{remote_port}"
+                    )
+
+                # Use CDP WebSocket directly — no local Chrome/chromedriver needed
+                import websocket as _ws
+                logger.info(f"Connecting to CDP WebSocket: {ws_url}")
+                self._cdp_ws = _ws.create_connection(ws_url, timeout=30)
+                self._cdp_ws.settimeout(10)
+                self._remote_mode = True
+                self._ws_url = ws_url
+
+                # Get the first page target
+                targets = _requests.get(f"{self._remote_url}/json", timeout=10).json()
+                page_targets = [t for t in targets if t.get('type') == 'page']
+                if page_targets:
+                    self._page_ws_url = page_targets[0].get('webSocketDebuggerUrl', '')
+                    # Fix localhost in page ws url
+                    if self._page_ws_url:
+                        _p = _urlparse(self._page_ws_url)
+                        if _p.hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
+                            self._page_ws_url = self._page_ws_url.replace(
+                                f"{_p.hostname}:{_p.port or 9222}",
+                                f"{remote_host}:{remote_port}"
+                            )
+                    logger.info(f"Found {len(page_targets)} page target(s)")
+
+                self._set_viewport_remote(remote_host, remote_port)
                 logger.info(f"Connected to remote browser at {self._remote_url}")
                 return
             except Exception as e:
@@ -180,17 +221,28 @@ class BrowserDevice:
 
     def browser_stop(self):
         """Quit the browser. In remote mode, only disconnect (don't kill the remote browser)."""
+        if self._remote_mode:
+            logger.info("Disconnecting from remote browser (not quitting)")
+            try:
+                if self._page_ws:
+                    self._page_ws.close()
+            except Exception:
+                pass
+            try:
+                if self._cdp_ws:
+                    self._cdp_ws.close()
+            except Exception:
+                pass
+            self._page_ws = None
+            self._cdp_ws = None
+            self._remote_mode = False
+            return
         if self.driver:
-            if self._remote_url:
-                # Remote mode: just detach, don't quit the remote browser
-                logger.info("Disconnecting from remote browser (not quitting)")
-                self.driver = None
-            else:
-                try:
-                    self.driver.quit()
-                except Exception:
-                    pass
-                self.driver = None
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
 
     def _try_reconnect(self) -> bool:
         """Try to connect to an existing browser session by debug port."""
@@ -201,15 +253,61 @@ class BrowserDevice:
     # CDP helpers
     # ------------------------------------------------------------------
 
+    def _cdp_send(self, ws, method: str, params: dict = None, msg_id: int = 1):
+        """Send a CDP command over WebSocket and return the result."""
+        import json as _json
+        msg = {"id": msg_id, "method": method, "params": params or {}}
+        ws.send(_json.dumps(msg))
+        # Read responses until we get the matching id
+        for _ in range(100):
+            resp = _json.loads(ws.recv())
+            if resp.get("id") == msg_id:
+                return resp.get("result", {})
+        return {}
+
     def _cdp(self, cmd: str, params: dict = None):
-        """Execute a Chrome DevTools Protocol command."""
+        """Execute a Chrome DevTools Protocol command.
+        In remote mode, uses WebSocket; otherwise uses Selenium driver."""
+        if self._remote_mode and self._page_ws:
+            return self._cdp_send(self._page_ws, cmd, params)
         if self.driver is None:
             return {}
         return self.driver.execute_cdp_cmd(cmd, params or {})
 
+    def _set_viewport_remote(self, host, port):
+        """Set viewport via direct CDP WebSocket in remote mode."""
+        import json as _json
+        import websocket as _ws
+
+        # Connect to the first page target for Page/Input commands
+        if self._page_ws_url:
+            self._page_ws = _ws.create_connection(self._page_ws_url, timeout=30)
+            self._page_ws.settimeout(10)
+            # Set viewport via page-level CDP
+            self._cdp_send(self._page_ws, "Emulation.setDeviceMetricsOverride", {
+                "width": 1920,
+                "height": 1080,
+                "deviceScaleFactor": 1,
+                "mobile": False,
+            })
+            # Navigate to cloud game if not already there
+            self._cdp_send(self._page_ws, "Page.enable", {})
+            self._cdp_send(self._page_ws, "Page.navigate", {"url": "https://sr.mihoyo.com/cloud"})
+            logger.info("Remote viewport set to 1920x1080, navigated to cloud game")
+        else:
+            logger.warning("No page target found for remote viewport setup")
+
     def _set_viewport(self):
         """Force viewport to 1920x1080 @ 1x scale (matching SRC's 1280x720
         assets after downscaling in screenshot())."""
+        if self._remote_mode and self._page_ws:
+            self._cdp_send(self._page_ws, "Emulation.setDeviceMetricsOverride", {
+                "width": 1920,
+                "height": 1080,
+                "deviceScaleFactor": 1,
+                "mobile": False,
+            })
+            return
         self._cdp("Emulation.setDeviceMetricsOverride", {
             "width": 1920,
             "height": 1080,
@@ -270,16 +368,19 @@ class BrowserDevice:
                 logger.warning(f"Screenshot attempt {attempt + 1} failed: {e}")
                 time.sleep(0.2)
 
-        # Fallback: Selenium native screenshot
-        try:
-            png = self.driver.get_screenshot_as_png()
-            img = Image.open(io.BytesIO(png)).convert("RGB")
-            arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-            arr = cv2.resize(arr, (1280, 720), interpolation=cv2.INTER_AREA)
-            return arr
-        except Exception as e:
-            logger.error(f"All screenshot methods failed: {e}")
-            raise
+        # Fallback: Selenium native screenshot (not available in remote mode)
+        if not self._remote_mode:
+            try:
+                png = self.driver.get_screenshot_as_png()
+                img = Image.open(io.BytesIO(png)).convert("RGB")
+                arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                arr = cv2.resize(arr, (1280, 720), interpolation=cv2.INTER_AREA)
+                return arr
+            except Exception as e:
+                logger.error(f"All screenshot methods failed: {e}")
+                raise
+        logger.error(f"All screenshot attempts failed in remote mode")
+        raise RuntimeError("Failed to take screenshot via CDP WebSocket")
 
     def screenshot_video_element(self) -> np.ndarray | None:
         """Attempt to grab a frame directly from the <video> element via JS.
