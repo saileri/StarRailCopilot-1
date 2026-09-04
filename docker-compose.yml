@@ -10,11 +10,8 @@ services:
       - "22267:22267"
     volumes:
       - ./config:/app/config
-      - ./browser_profile:/app/browser_profile
       - ./log:/app/log
     environment:
       - TZ=Asia/Shanghai
-      # Uncomment to use remote browser on another machine:
+      # Remote browser: set to your browser machine's IP + port
       # - BROWSER_REMOTE_URL=http://192.168.31.x:9222
-    # For local headless Chrome (needs --shm-size for video decoding):
-    shm_size: '2gb'
